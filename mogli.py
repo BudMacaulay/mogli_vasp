@@ -24,10 +24,12 @@ import itertools
 
 import numpy as np
 import numpy.linalg as la
-try:
-    import pybel
-except ImportError:
-    pybel = None
+
+# Import testing - I dont ever use pybel cause its a bit finnicky instead file format handling is done through ASE uncomment if want
+#try:
+#    import pybel
+#except ImportError:
+pybel = None
 
 try:
     import ase.io, ase.build, ase.atoms
