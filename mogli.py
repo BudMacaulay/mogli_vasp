@@ -1,7 +1,17 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Simple visualization of molecules.
+Much less Simple visualization of molecules.
+
+# TODO - The camera is a bit finnicky. the matrix representation is screwing with my head a bit
+# TODO - The current 'read' function saves it as a 1 long list. Which seems most silly. Could perhaps rewrite this.
+
+# TODO - FOR SURE REWRITE THE 'READ' FUNCTION + make 'show' able to accept input as a list in which it will load all structures in the
+list. This could be a super cool implementation as it will allow quick easy loading of XDATCAR...
+
+# TODO - Check if the ghosts site function alongside the render atomic movement results in an erronous visualisation...
+my instinct is not.
+
 """
 
 from __future__ import absolute_import
@@ -18,6 +28,12 @@ try:
     import pybel
 except ImportError:
     pybel = None
+
+try:
+    import ase.io, ase.build, ase.atoms
+except ImportError:
+    ase = None
+
 import gr3
 import glfw
 from OpenGL.GL import glEnable, glDisable, glClear, glBindFramebuffer, glViewport,\
@@ -141,7 +157,10 @@ def _create_rotation_matrix(angle, x, y, z):
 _mouse_dragging = False
 _previous_mouse_position = None
 _camera = None
-
+_right_dragging = False
+_shift_mod = False
+_init_camera = None
+camera_distance = 10.0
 
 def _mouse_move_callback(window, x, y):
     """ Mouse move event handler for GLFW. """
@@ -166,6 +185,25 @@ def _mouse_move_callback(window, x, y):
         _camera = eye, center, up
         _previous_mouse_position = (x, y)
 
+def _key_camera_move_callback(window, dx, dy):
+    """ Mouse move event handler for GLFW. """
+    global _camera
+    if _camera is not None:
+        width, height = glfw.get_window_size(window)
+        rotation_intensity = la.norm((dx, dy)) * 2
+        eye, center, up = _camera
+        camera_distance = la.norm(center-eye)
+        forward = (center-eye)/camera_distance
+        right = np.cross(forward, up)
+        rotation_axis = (up*dx+right*dy)
+        rotation_matrix = _create_rotation_matrix(-rotation_intensity,
+                                                  rotation_axis[0],
+                                                  rotation_axis[1],
+                                                  rotation_axis[2])
+        forward = np.dot(rotation_matrix, forward)
+        up = np.dot(rotation_matrix, up)
+        eye = center-forward*camera_distance
+        _camera = eye, center, up
 
 def _mouse_click_callback(window, button, status, modifiers):
     """ Mouse click event handler for GLFW. """
@@ -177,18 +215,152 @@ def _mouse_click_callback(window, button, status, modifiers):
         elif status == glfw.PRESS:
             _mouse_dragging = True
             _previous_mouse_position = glfw.get_cursor_pos(window)
+        print(list(_camera))
 
+
+def _key_press_callback(window, key, scancode, action, mods):
+    """
+    Key press modifier for all keys
+    These may need some moderate rewrites and probably a seperate file since its getting chaotic
+
+    Current implementation:
+
+    MODIFIERS:SHIFT, USE switches translational arrows to rotational
+
+    KEY PRESSES: UP,DOWN,LEFT,RIGHT: TRANSLATES THE CAMERA IN THESE DIRECTIONS IN A SEMI CONFUSING WAY -- NEEDS WORKS
+    (since the camera object is moved around the structure up,down,left,right also move relative which causes issues atm)
+
+    FIX -> (Make translation a unit cell translation instead, this may solve this issue.)
+    FIX -> (Make the new axis the principle axis of translation each time (i.e orthonormal after each movment. ))
+    [This may be math heavy]
+
+
+    RESETS: SHIFT+R -> RESETS THE CAMERA TO THE INTIAL CALLED CAMERA LOCATION defined in mogli.show
+
+    """
+    global _camera, _shift_mod, _init_camera, camera_distance, center
+    if action == glfw.PRESS:
+        if key == glfw.KEY_LEFT_SHIFT:
+            _shift_mod = True
+    elif action == glfw.RELEASE:
+        if key == glfw.KEY_LEFT_SHIFT:
+            _shift_mod = False
+            print(_init_camera)
+
+        if not _shift_mod: # flag to see if shift is pressed
+        #    if key == glfw.KEY_LEFT:
+        #        print("key <- pressed")
+        #        print(_camera)
+        #        _camera = _camera + np.array([[-1, 0, 0], [-1, 0, 0], [0, 0, 0]])
+                #_camera = _camera + 1
+            #elif key == glfw.KEY_RIGHT:
+            #    print("key -> pressed")
+            #    print(_camera)
+            #    _camera = _camera + np.array([[1, 0, 0], [1, 0, 0], [0, 0, 0]])
+            #elif key == glfw.KEY_UP:
+            #    print("key ^ pressed")
+            #    _camera = _camera + np.array([[0, 0, 0], [0,-1,-1], [0, 0, 0]])
+            #    print(_camera)
+            #elif key == glfw.KEY_DOWN:
+            #    print("key v pressed")
+            #    _camera = _camera + np.array([[0, 0, 0], [0, 1, 1], [0, 0, 0]])
+            if key == glfw.KEY_DOWN: ### CORECT
+                #_camera = _camera + np.array([[0, 1, 0], [0, 1, 0], [0, 0, 0]])
+                _camera = _camera + np.array([_camera[2], _camera[2], [0,0,0]])
+            elif key == glfw.KEY_UP:
+                _camera = _camera + np.array([-_camera[2], -_camera[2], [0,0,0]])
+            elif key == glfw.KEY_RIGHT:
+                vec_face = _camera[0] - _camera[1]
+                t = (np.cross(vec_face, _camera[2]))
+                if abs(t[0]) > abs(t[1]):
+                    if abs(t[0]) > abs(t[2]):
+                        _camera = _camera + np.array([[np.sign(t[0]),0,0], [np.sign(t[0]),0,0], [0,0,0]])
+                    else:
+                        _camera = _camera + np.array([[0,0,np.sign(t[2])], [0, 0, np.sign(t[2])], [0,0,0]])
+                else:
+                    _camera = _camera + np.array([[-1,0,0], [-1,0,0], [0,0,0]])
+            elif key == glfw.KEY_LEFT:
+                vec_face = _camera[0] - _camera[1]
+                t = (np.cross(vec_face, _camera[2]))
+                if abs(t[0]) > abs(t[1]):
+                    if abs(t[0]) > abs(t[2]):
+                        _camera = _camera + np.array([[-np.sign(t[0]),0,0], [-np.sign(t[0]),0,0], [0,0,0]])
+                    else:
+                        _camera = _camera + np.array([[0,0,-np.sign(t[2])], [0, 0, -np.sign(t[2])], [0,0,0]])
+                else:
+                    _camera = _camera + np.array([[1,0,0], [1,0,0], [0,0,0]])
+
+
+        elif _shift_mod:
+            if key == glfw.KEY_R:
+                print("RESET CALLED")
+                _camera = list(_init_camera)
+                print(_camera)
+            if key == glfw.KEY_A:
+                print("ALIGN A")
+                _camera = np.array([[0.001, 0.001,camera_distance], center, [0,1,0]])
+            if key == glfw.KEY_X:
+                print("ALIGN B")
+                _camera = np.array([[camera_distance, 0,0], center, [0,1,0]])
+            if key == glfw.KEY_Z:
+                print("ALIGN C")
+                _camera = np.array([[1,camera_distance ,1], center, [0,1,0]])
+
+
+
+            if key == glfw.KEY_LEFT:
+                print("key <- pressed")
+                print(_camera)
+                _key_camera_move_callback(window, dx=0.08, dy=0)
+                #_camera = _camera + 1
+            elif key == glfw.KEY_RIGHT:
+                print("key -> pressed")
+                print(_camera)
+                _key_camera_move_callback(window, dx=-0.08, dy=0)
+            elif key == glfw.KEY_UP:
+                print("key ^ pressed")
+                _key_camera_move_callback(window, dx=0.00, dy=0.08)
+                print(_camera)
+            elif key == glfw.KEY_DOWN:
+                print("key v pressed")
+                _key_camera_move_callback(window, dx=0.00, dy=-0.08)
+
+
+def _scroll_callback(window, rightleft, updown): # scroll camera
+    global _camera
+
+    index = np.argmax(abs(_camera[0])) ### REALLY SUSPECT WAY
+    if index == 0:
+        _camera = _camera + np.array([[updown, 0, 0], [0, 0, 0], [0, 0, 0]])
+    if index == 1:
+        _camera = _camera + np.array([[0, updown, 0], [0, 0, 0], [0, 0, 0]])
+    if index == 2:
+        _camera = _camera + np.array([[0, 0, updown], [0, 0, 0], [0, 0, 0]])
+
+    #if abs(_camera[0][2]) > abs(_camera[0][0]):
+    #    if abs(_camera[0][2]) > abs(_camera[0][1]):
+    #        _camera = _camera + np.array([[0, 0, updown], [0, 0, 0], [0, 0, 0]])
+    #    else:
+    #        _camera = _camera + np.array([[0, updown, 0], [0, 0, 0], [0, 0, 0]])
+    #else:
+    #    _camera = _camera + np.array([[updown, 0, 0], [0, 0, 0], [0, 0, 0]])
+
+
+    #_camera = _camera + np.array([[0, 0, updown], [0, 0, 0], [0, 0, 0]])
+    #_camera = _camera + np.array([[0, 0, updown], [0, 0, 0], [0, 0, 0]])
 
 class Molecule(object):
     """
     A class for storing information about a Molecule. The atomic bonds need to
     be explicitly calculated using the calculate_bonds function.
     """
-    def __init__(self, atomic_numbers, positions):
+    def __init__(self, atomic_numbers, positions, unit_cell,):
         self.atomic_numbers = atomic_numbers
         self.positions = positions
         self.bonds = None
+        self.cell = None
         self._atomic_radii = None
+        self.unit_cell = unit_cell
 
     @property
     def atomic_radii(self):
@@ -258,7 +430,6 @@ class Molecule(object):
             index_pairs = np.zeros((0, 2))
         self.bonds = Bonds(method, param, index_pairs)
 
-
 class Bonds(object):
     """
     A simple class for storing information about atomic bonds in a molecule.
@@ -272,6 +443,7 @@ class Bonds(object):
         return len(self.index_pairs)
 
 
+
 class UnknownFileFormatException(Exception):
     """
     This exception will be raised when read() is called with file name that
@@ -280,7 +452,7 @@ class UnknownFileFormatException(Exception):
     pass
 
 
-def read(file_name, file_format=None):
+def read(file_name, file_format=None, add_ghost_sites=True, tol=0.05):
     """
     Reads molecules from a file. If available, pybel will be used to read the
     file, otherwise only xyz files can be read.
@@ -339,6 +511,24 @@ def read(file_name, file_format=None):
                 positions.shape = (len(atoms), 3)
                 molecules.append(Molecule(atomic_numbers, positions))
         return molecules
+
+    elif ase:
+        t = ase.io.read(file_name)
+        molecules = []
+        num_atoms = len(t)
+        cell = None
+
+        if add_ghost_sites:
+            if  t.pbc.all():
+                v = ase.build.cut(atoms=t, a=(1, 0, 0), b=(0, 1, 0), c=(0, 0, 1), extend=1.00+tol) #Extend slightly across
+                v = ase.build.sort(v, tags=v.get_atomic_numbers())
+                molecules.append(Molecule(list(v.numbers), v.positions, v.cell))
+            else:
+                print("Broken symmtery setting ghost sites off.")
+        else:
+                molecules.append(Molecule(list(t.numbers), t.positions, t.cell))
+        return molecules
+
     else:
         if (file_format is 'xyz' or
                 (file_format is None and file_name.endswith('.xyz'))):
@@ -366,7 +556,7 @@ def read(file_name, file_format=None):
 
 
 def show(molecule, width=500, height=500,
-         show_bonds=True, bonds_method='radii', bonds_param=None,
+         show_bonds=True, show_cell=False, bonds_method='radii', bonds_param=None,
          camera=None, title='mogli'):
     """
     Interactively show the given molecule with OpenGL. By default, bonds are
@@ -377,8 +567,8 @@ def show(molecule, width=500, height=500,
     molecule will be viewed in the direction of the z axis, with the y axis
     pointing upward.
     """
-    global _camera
-    molecule.positions -= np.mean(molecule.positions, axis=0)
+    global _camera, _init_camera, max_atom_distance, camera_distance, center
+    #molecule.positions -= np.mean(molecule.positions, axis=0)
     max_atom_distance = np.max(la.norm(molecule.positions, axis=1))
     if show_bonds:
         molecule.calculate_bonds(bonds_method, bonds_param)
@@ -395,20 +585,27 @@ def show(molecule, width=500, height=500,
     glEnable(GL_MULTISAMPLE)
 
     # Set up the camera (it will be changed during mouse rotation)
-    if camera is None:
+    if camera is None: # This method makes Shift-rotates look ALOT cleaner.
         camera_distance = -max_atom_distance*2.5
+        center = molecule.positions.mean(axis=0)
         camera = ((0, 0, camera_distance),
-                  (0, 0, 0),
+                  center,
                   (0, 1, 0))
     camera = np.array(camera)
     _camera = camera
+    _init_camera = camera
 
     # Create the GR3 scene
     gr3.setbackgroundcolor(255, 255, 255, 0)
-    _create_gr3_scene(molecule, show_bonds)
+    _create_gr3_scene(molecule, show_bonds, show_cell)
     # Configure GLFW
     glfw.set_cursor_pos_callback(window, _mouse_move_callback)
     glfw.set_mouse_button_callback(window, _mouse_click_callback)
+
+    # Custom adds
+    glfw.set_key_callback(window, _key_press_callback)
+    glfw.set_scroll_callback(window, _scroll_callback)
+
     glfw.swap_interval(1)
     # Start the GLFW main loop
     while not glfw.window_should_close(window):
@@ -424,9 +621,76 @@ def show(molecule, width=500, height=500,
     gr3.terminate()
 
 
+
+def show_movement(molecule_1, molecule_2, width=500, height=500,
+         show_bonds=True, show_cell=False, bonds_method='radii', bonds_param=None,
+         camera=None, title='mogli'):
+    """
+    Interactively show the given molecule alongside, an updated molecule post geometry optimization.
+    This flag is effectively the same as Andrea's matplotlib stuff that he did but rendered alot better.
+    Should be a cool flag!
+
+    """
+    global _camera, _init_camera, camera_distance, center
+    #molecule.positions -= np.mean(molecule.positions, axis=0)
+
+
+    max_atom_distance = np.max(la.norm(molecule_1.positions, axis=1))
+    if show_bonds:
+        molecule_1.calculate_bonds(bonds_method, bonds_param)
+
+    # If GR3 was initialized earlier, it would use a different context, so
+    # it will be terminated first.
+    gr3.terminate()
+
+    # Initialize GLFW and create an OpenGL context
+    glfw.init()
+    glfw.window_hint(glfw.SAMPLES, 16)
+    window = glfw.create_window(width, height, title, None, None)
+    glfw.make_context_current(window)
+    glEnable(GL_MULTISAMPLE)
+
+    # Set up the camera (it will be changed during mouse rotation)
+    if camera is None: # This method makes Shift-rotates look ALOT cleaner.
+        camera_distance = -max_atom_distance*2.5
+        center = molecule_1.positions.mean(axis=0)
+        camera = ((0, 0, camera_distance),
+                  center,
+                  (0, 1, 0))
+    camera = np.array(camera)
+    _camera = camera
+    _init_camera = camera
+
+    # Create the GR3 scene
+    gr3.setbackgroundcolor(255, 255, 255, 0)
+    _create_gr3_compare_scene(molecule_1, molecule_2, show_bonds, show_cell)
+    # Configure GLFW
+    glfw.set_cursor_pos_callback(window, _mouse_move_callback)
+    glfw.set_mouse_button_callback(window, _mouse_click_callback)
+
+    # Custom adds
+    glfw.set_key_callback(window, _key_press_callback)
+    glfw.set_scroll_callback(window, _scroll_callback)
+
+    glfw.swap_interval(1)
+    # Start the GLFW main loop
+    while not glfw.window_should_close(window):
+        glfw.poll_events()
+        width, height = glfw.get_window_size(window)
+        glViewport(0, 0, width, height)
+        _set_gr3_camera()
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        gr3.drawimage(0, width, 0, height,
+                      width, height, gr3.GR3_Drawable.GR3_DRAWABLE_OPENGL)
+        glfw.swap_buffers(window)
+    glfw.terminate()
+    gr3.terminate()
+
+
+
 def draw(molecule,
          xmin=0, xmax=1, ymin=0, ymax=1, width=500, height=500,
-         show_bonds=True, bonds_method='radii', bonds_param=None,
+         show_bonds=True, show_cell=False, bonds_method='radii', bonds_param=None,
          camera=None):
     """
     Draw the given molecule with the GR framework. By default, bonds are drawn,
@@ -437,24 +701,34 @@ def draw(molecule,
     molecule will be viewed in the direction of the z axis, with the y axis
     pointing upward.
     """
-    global _camera
-    molecule.positions -= np.mean(molecule.positions, axis=0)
+    global _camera, _init_camera
+    #molecule.positions -= np.mean(molecule.positions, axis=0)
     max_atom_distance = np.max(la.norm(molecule.positions, axis=1))
     if show_bonds:
         molecule.calculate_bonds(bonds_method, bonds_param)
 
-    if camera is None:
+    #if camera is None: \\\ This method has been outlawed since it fixes the camera @ 0,0,0 which isnt always useful
+    #    camera_distance = -max_atom_distance*2.5
+    #    camera = ((0, 0, camera_distance),
+    #              (0, 0, 0),
+    #              (0, 1, 0))
+
+    if camera is None: # This method makes Shift-rotates look ALOT cleaner.
         camera_distance = -max_atom_distance*2.5
+        center = molecule.positions.mean(axis=0)
         camera = ((0, 0, camera_distance),
-                  (0, 0, 0),
+                  center,
                   (0, 1, 0))
+
+
     camera = np.array(camera)
     _camera = camera
+    _init_camera = _camera
 
     # Create the GR3 scene
     gr3.setbackgroundcolor(255, 255, 255, 0)
     _set_gr3_camera()
-    _create_gr3_scene(molecule, show_bonds)
+    _create_gr3_scene(molecule, show_bonds, show_cell)
     glEnable(GL_DEPTH_TEST)
     gr3.setquality(gr3.GR3_Quality.GR3_QUALITY_OPENGL_2X_SSAA)
     gr3.drawimage(xmin, xmax, ymin, ymax,
@@ -464,7 +738,7 @@ def draw(molecule,
 
 
 def export(molecule, file_name, width=500, height=500,
-           show_bonds=True, bonds_method='radii', bonds_param=None,
+           show_bonds=True, show_cell=False, bonds_method='radii', bonds_param=None,
            camera=None):
     """
     Draw the given molecule into a given file. The file type is determined by
@@ -477,16 +751,17 @@ def export(molecule, file_name, width=500, height=500,
     pointing upward.
     """
     global _camera
-    molecule.positions -= np.mean(molecule.positions, axis=0)
+    #molecule.positions -= np.mean(molecule.positions, axis=0)
     max_atom_distance = np.max(la.norm(molecule.positions, axis=1))
     if show_bonds:
         molecule.calculate_bonds(bonds_method, bonds_param)
 
     if camera is None:
-        if _camera is None:
-            camera_distance = -max_atom_distance*2.5
+        if _camera is None:  # This method makes Shift-rotates look ALOT cleaner.
+            camera_distance = -max_atom_distance * 2.5
+            center = molecule.positions.mean(axis=0)
             camera = ((0, 0, camera_distance),
-                      (0, 0, 0),
+                      center,
                       (0, 1, 0))
         else:
             camera = _camera
@@ -496,7 +771,7 @@ def export(molecule, file_name, width=500, height=500,
     # Create the GR3 scene
     gr3.setbackgroundcolor(255, 255, 255, 0)
     _set_gr3_camera()
-    _create_gr3_scene(molecule, show_bonds)
+    _create_gr3_scene(molecule, show_bonds, show_cell)
     glEnable(GL_DEPTH_TEST)
     gr3.export(file_name, width, height)
     glBindFramebuffer(GL_FRAMEBUFFER, 0)
@@ -511,7 +786,7 @@ def _set_gr3_camera():
                      up[0], up[1], up[2])
 
 
-def _create_gr3_scene(molecule, show_bonds=True):
+def _create_gr3_scene(molecule, show_bonds=True, show_cell=False):
     """
     Create the GR3 scene from the provided molecule and - if show_bonds is
     True (default) - the atomic bonds in the molecule.
@@ -533,6 +808,87 @@ def _create_gr3_scene(molecule, show_bonds=True):
         bond_colors = np.ones((num_bonds, 3), dtype=np.float32)*0.3
         gr3.drawcylindermesh(num_bonds, bond_positions, bond_directions,
                              bond_colors, bond_radii, bond_lengths)
+
+    if show_cell:
+        """
+        Method that shows the unit cell, using the standard convention. Not sure if this would break. I doubt it will!
+        
+        If there is a "draw box" method in OpenGL i couldnt find it and wasnt fussed enough to try and find it!
+        """
+        index_pairs = np.array([[0,1], [0,2], [0,3], [1,4], [1,7], [2,5], [2,7], [3,4], [3,5], [4,6], [5,6], [6,7]])
+        a = molecule.unit_cell[0]
+        b = molecule.unit_cell[1]
+        c = molecule.unit_cell[2]
+        positions = np.array([[0,0,0], a, b, c, a+c, b+c, a+b+c, a+b])
+        cell_positions = positions[index_pairs[:,0]]
+        cell_directions = positions[index_pairs[:, 1]]-cell_positions
+        cell_lengths = la.norm(cell_directions, axis=1)
+        cell_directions /= cell_lengths.reshape(12, 1)
+        cell_radii = np.ones(12, dtype=np.float32)*0.04
+        cell_colors = np.ones((12, 3), dtype=np.float32)*0.25
+
+        gr3.drawcylindermesh(12, cell_positions, cell_directions,
+                             cell_colors, cell_radii, cell_lengths)
+
+
+def _create_gr3_compare_scene(molecule_1, molecule_2, show_bonds=True, show_cell=False):
+    """
+    Create the GR3 scene from the provided molecule and - if show_bonds is
+    True (default) - the atomic bonds in the molecule.
+    """
+    gr3.clear()
+    # Quick consistancy check
+    if not len(molecule_1.atomic_numbers) == len(molecule_2.atomic_numbers):
+        print("WARNING MOLECULES NOT ALIGNED")
+
+    num_atoms = len(molecule_1.atomic_numbers)
+    gr3.drawspheremesh(num_atoms,
+                       molecule_1.positions,
+                       ATOM_COLORS[molecule_1.atomic_numbers],
+                       molecule_1.atomic_radii)
+
+
+    gr3.drawspheremesh(num_atoms,
+                       molecule_2.positions,
+                       0.500*ATOM_COLORS[molecule_2.atomic_numbers],
+                       molecule_2.atomic_radii)
+
+
+    if show_bonds and len(molecule_1.bonds.index_pairs) > 0:
+        index_pairs = molecule_1.bonds.index_pairs
+        num_bonds = len(molecule_1.bonds)
+        bond_positions = molecule_1.positions[index_pairs[:, 0]]
+        bond_directions = molecule_1.positions[index_pairs[:, 1]] - bond_positions
+        bond_lengths = la.norm(bond_directions, axis=1)
+        bond_directions /= bond_lengths.reshape(num_bonds, 1)
+        bond_radii = np.ones(num_bonds, dtype=np.float32) * BOND_RADIUS
+        bond_colors = np.ones((num_bonds, 3), dtype=np.float32) * 0.3
+        gr3.drawcylindermesh(num_bonds, bond_positions, bond_directions,
+                             bond_colors, bond_radii, bond_lengths)
+
+    if show_cell:
+        """
+        Method that shows the unit cell, using the standard convention. Not sure if this would break. I doubt it will!
+
+        If there is a "draw box" method in OpenGL i couldnt find it and wasnt fussed enough to try and find it!
+        """
+        if not np.allclose(molecule_1.unit_cell,molecule_2.unit_cell, rtol=2e-04):
+            print("WARNING A larger than 1% change in lattice parameter detected. Are you sure these are the same lattice.")
+        index_pairs = np.array(
+            [[0, 1], [0, 2], [0, 3], [1, 4], [1, 7], [2, 5], [2, 7], [3, 4], [3, 5], [4, 6], [5, 6], [6, 7]])
+        a = molecule_1.unit_cell[0]
+        b = molecule_1.unit_cell[1]
+        c = molecule_1.unit_cell[2]
+        positions = np.array([[0, 0, 0], a, b, c, a + c, b + c, a + b + c, a + b])
+        cell_positions = positions[index_pairs[:, 0]]
+        cell_directions = positions[index_pairs[:, 1]] - cell_positions
+        cell_lengths = la.norm(cell_directions, axis=1)
+        cell_directions /= cell_lengths.reshape(12, 1)
+        cell_radii = np.ones(12, dtype=np.float32) * 0.04
+        cell_colors = np.ones((12, 3), dtype=np.float32) * 0.25
+
+        gr3.drawcylindermesh(12, cell_positions, cell_directions,
+                             cell_colors, cell_radii, cell_lengths)
 
 
 def main():
